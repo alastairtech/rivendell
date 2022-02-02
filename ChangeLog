@@ -20821,3 +20821,12 @@
 2021-10-07 Fred Gleason <fredg@paravelsystems.com>
 	* Fixed a bug in rdimport(1) that caused premature validation
 	of metadata.
+2021-12-17 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in rdxport(8) that caused the 'SaveLog' WebAPI call
+	to fail if the target log didn't exist.
+2021-12-17 Fred Gleason <fredg@paravelsystems.com>
+	* Added a 'linkLength' field to the return XML for the 'ListLog'
+	WebAPI call.
+2021-12-17 Fred Gleason <fredg@paravelsystems.com>
+	* Added a 'graceTime' field to the return XML for the 'ListLog'
+	WebAPI call.
