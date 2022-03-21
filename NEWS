@@ -1,9 +1,25 @@
 The NEWS file for the Rivendell package.
 
 -------------------------------------------------------------------------------
-v3.6.2int2 --7 September 2021
+v3.6.5 --18 March 2022
 
 Changes:
+   Various bugfixes. See the ChangeLog for details.
+
+Database Update:
+   This version of Rivendell uses database schema version 347, and will
+   automatically upgrade any earlier versions. To see the current schema
+   version prior to upgrade, see RDAdmin->SystemInfo.
+
+   Be sure to run 'rddbmgr --modify' (as root) immediately after upgrading
+   to allow any necessary changes to the database schema to be applied.
+-------------------------------------------------------------------------------
+v3.6.4 --22 February 2022
+
+Changes:
+   RDLogEdit. Added a 'Log Listing (CSV)' report under the 'Reports'
+   button in the 'Edit Log' dialog.
+
    Added a 'SuppressMusicImportLinks=No|Yes' directive to the [Hacks]
    section of rd.conf(5).
 
@@ -13,6 +29,8 @@ Changes:
 
    Now & Next/PAD System. Deprecated the use of the 'Transmit Now & Next data'
    checkbox in the 'Group' dialog in rdadmin(1).
+
+   Various bugfixes. See the ChangeLog for details.
 
 Database Update:
    This version of Rivendell uses database schema version 347, and will
