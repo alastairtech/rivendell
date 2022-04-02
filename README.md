@@ -1,14 +1,15 @@
 ### Rivendell Radio Automation for ARM Hardware
 
-Welcome to the github for the Rivendell on ARM project. This release has no affiliation with the official Rivendell software. We aim to provide a stable release for those who wish to use the software on ARM based hardware, such as the Raspberry Pi, Pinebook Pro, Orange Pi, ASUS Tinker Board and other single board computers. We will be merging as much of the official code as possible. Most of the changes in this repository are about running Rivendell reliably on ARM based hardware using Debian Buster. The packages are provided as is and come with no guarentee or warranty.
+Welcome to the github for the Rivendell on ARM project. This release has no affiliation with the official Rivendell software. We aim to provide a stable release for those who wish to use the software on ARM based hardware, such as the Raspberry Pi, Pinebook Pro, Orange Pi, ASUS Tinker Board and other single board computers. We will be merging as much of the official code as possible. Most of the changes in this repository are about running Rivendell reliably on ARM based hardware using Debian 10 Buster. The packages are provided as is and come with no guarentee or warranty.
 
 #### Please see the [wiki](https://github.com/edgeradio993fm/rivendell/wiki) page for the latest install guides and updates.
 
 ***
 ### Tested Hardware
-Raspberry Pi 3B using Raspberry Pi OS<br>
-Raspberry Pi 3B+ using Raspberry Pi OS<br>
-Raspberry Pi 4 Model B using Raspberry Pi OS<br>
+Raspberry Pi 3B using Raspberry Pi OS legacy<br>
+Raspberry Pi 3B+ using Raspberry Pi OS legacy<br>
+Raspberry Pi 4 Model B using Raspberry Pi OS legacy<br>
+Raspberry Pi 400 using Raspberry Pi OS legacy<br>
 ASUS Tinker Board using Armbian Buster<br>
 Pine64 Pinebook Pro using Armbian Buster<br>
 Pine64 ROCKPro64 using Armbian Buster<p>
