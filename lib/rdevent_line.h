@@ -22,12 +22,23 @@
 #define RDEVENT_LINE_H
 
 #include <QDateTime>
+#include <QMap>
+#include <QStringList>
 
 #include <rdlogmodel.h>
 #include <rdeventimportlist.h>
 #include <rdlog.h>
 #include <rdlog_line.h>
 #include <rdstation.h>
+
+struct __RDEventLine_CartCacheEntry
+{
+  QList<unsigned> cartnums;
+  QStringList artists;
+  QStringList titles;
+  QList<QStringList> schedcodes;
+};
+
 
 class __RDEventLine_GeneratorState
 {
@@ -49,6 +60,7 @@ class RDEventLine
   enum ImportSource {None=0,Traffic=1,Music=2,Scheduler=3};
   enum InsertFirst {InsertNone=0,InsertBreak=1,InsertTrack=2};
   RDEventLine(RDStation *station);
+  ~RDEventLine();
   QString name() const;
   void setName(const QString &name);
   int preposition() const;
@@ -136,6 +148,7 @@ class RDEventLine
   int event_artist_sep;
   int event_title_sep;
   RDStation *event_station;
+  QMap<QString,__RDEventLine_CartCacheEntry*> event_cart_cache;
 };
 
 #endif  // RDEVENT_LINE_H

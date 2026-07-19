@@ -18,10 +18,15 @@
 //   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 //
 
+#include <algorithm>
+
+#include <QCoreApplication>
+#include <QFile>
 #include <QMessageBox>
+#include <QPainter>
 
 #include <rddatedecode.h>
-#include <rddatedialog.h>
+#include <rdescape_string.h>
 #include <rdlog.h>
 #include <rdsvc.h>
 #include <rdtextfile.h>
@@ -30,6 +35,121 @@
 #include "generate_log.h"
 #include "globals.h"
 
+
+//
+// MultiDateCalendar
+//
+
+MultiDateCalendar::MultiDateCalendar(QWidget *parent)
+  : QCalendarWidget(parent)
+{
+  // Suppress the native single-date selection cursor so it cannot be
+  // confused with our own blue "marked for generation" highlight.
+  setStyleSheet("QCalendarWidget QAbstractItemView:enabled {"
+		"  selection-background-color: white;"
+		"  selection-color: black; }");
+  connect(this,SIGNAL(clicked(const QDate &)),
+	  this,SLOT(dateClickedSlot(const QDate &)));
+}
+
+
+QSet<QDate> MultiDateCalendar::markedDates() const
+{
+  return cal_dates;
+}
+
+
+int MultiDateCalendar::markedCount() const
+{
+  return cal_dates.size();
+}
+
+
+void MultiDateCalendar::clearMarked()
+{
+  cal_dates.clear();
+  refreshFormats();
+  emit markedDatesChanged(0);
+}
+
+
+void MultiDateCalendar::setLogStatuses(const QMap<QDate,int> &statuses)
+{
+  cal_log_status=statuses;
+  refreshFormats();
+}
+
+
+void MultiDateCalendar::refreshFormats()
+{
+  // Clear every format we previously set so no stale colour lingers.
+  foreach(const QDate &d,cal_formatted) {
+    setDateTextFormat(d,QTextCharFormat());
+  }
+  cal_formatted.clear();
+
+  // Apply log-status colours for dates not currently marked (blue wins).
+  for(QMap<QDate,int>::const_iterator it=cal_log_status.constBegin();
+      it!=cal_log_status.constEnd();++it) {
+    if(!cal_dates.contains(it.key())) {
+      QTextCharFormat fmt;
+      if(it.value()==2)
+        fmt.setBackground(QColor(144,238,144));   // green: traffic merged
+      else
+        fmt.setBackground(QColor(255,255,153));   // yellow: generated only
+      fmt.setForeground(Qt::black);
+      setDateTextFormat(it.key(),fmt);
+      cal_formatted.insert(it.key());
+    }
+  }
+
+  // Apply blue for dates marked for generation.
+  foreach(const QDate &d,cal_dates) {
+    QTextCharFormat fmt;
+    fmt.setBackground(QColor(147,197,253));
+    fmt.setForeground(Qt::black);
+    setDateTextFormat(d,fmt);
+    cal_formatted.insert(d);
+  }
+
+  updateCells();
+}
+
+
+void MultiDateCalendar::paintCell(QPainter *painter,const QRect &rect,
+				  const QDate &date) const
+{
+  QCalendarWidget::paintCell(painter,rect,date);
+  if(cal_formatted.contains(date)) {
+    QTextCharFormat fmt=dateTextFormat(date);
+    QColor bg=fmt.background().color();
+    if(bg.isValid()) {
+      // Overdraw whatever the parent (including selection highlight) painted.
+      painter->save();
+      painter->fillRect(rect.adjusted(1,1,-1,-1),bg);
+      painter->setPen(Qt::black);
+      painter->drawText(rect,Qt::AlignCenter,QString::number(date.day()));
+      painter->restore();
+    }
+  }
+}
+
+
+void MultiDateCalendar::dateClickedSlot(const QDate &date)
+{
+  if(cal_dates.contains(date))
+    cal_dates.remove(date);
+  else
+    cal_dates.insert(date);
+  refreshFormats();
+  emit markedDatesChanged(cal_dates.size());
+}
+
+
+//
+// GenerateLog
+//
+
 GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
 			 QDate *cmd_date)
   : RDDialog(parent)
@@ -37,8 +157,8 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   QStringList services_list;
   bool cmdservicefit=false;
   cmdswitch=cmd_switch;
-  cmdservice = cmd_service;
-  cmddate = cmd_date;
+  cmdservice=cmd_service;
+  cmddate=cmd_date;
 
   setWindowTitle("RDLogManager - "+tr("Generate Log"));
 
@@ -51,14 +171,7 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   setMinimumSize(sizeHint());
   setMaximumSize(sizeHint());
 
-  //
-  // Progress Dialog
-  //
-  gen_progress_dialog=
-    new QProgressDialog(tr("Generating Log..."),tr("Cancel"),0,24,this);
-  gen_progress_dialog->setWindowTitle("Progress");
-  gen_progress_dialog->setCancelButton(NULL);
-  gen_progress_dialog->setValue(gen_progress_dialog->maximum());
+  gen_progress_dialog=nullptr;
 
   //
   // Service Name
@@ -73,48 +186,64 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   QString sql="select `NAME` from `SERVICES`";
   RDSqlQuery *q=new RDSqlQuery(sql);
   while(q->next()) {
-    services_list.append( q->value(0).toString() );
+    services_list.append(q->value(0).toString());
   }
   delete q;
   gen_service_box->insertItem(0,tr("[select service]"));
-  for ( QStringList::Iterator it = services_list.begin(); 
-        it != services_list.end();
-        ++it ) {
+  for(QStringList::Iterator it=services_list.begin();
+      it!=services_list.end();
+      ++it) {
     gen_service_box->
       insertItem(gen_service_box->count(),rda->iconEngine()->serviceIcon(),*it);
-    if (cmdswitch != 0 && *cmdservice == *it)
+    if(cmdswitch!=0 && *cmdservice==*it)
       cmdservicefit=true;
   }
 
   //
-  // Date
+  // Multi-date Calendar
   //
-  gen_date_edit=new RDDateEdit(this);
-  gen_date_label=new QLabel(tr("Date:"),this);
-  gen_date_label->setFont(labelFont());
-  gen_date_label->setAlignment(Qt::AlignRight|Qt::AlignVCenter);
-  if (cmdswitch==0)
-  gen_date_edit->setDate(QDate::currentDate().addDays(1));
-  else
-    gen_date_edit->setDate(*cmddate);
-
-  connect(gen_date_edit,SIGNAL(dateChanged(const QDate &)),
-	  this,SLOT(dateChangedData(const QDate &)));
+  gen_calendar=new MultiDateCalendar(this);
+  gen_calendar->setGridVisible(true);
+  connect(gen_calendar,SIGNAL(markedDatesChanged(int)),
+	  this,SLOT(markedDatesChangedData(int)));
+  connect(gen_calendar,SIGNAL(selectionChanged()),
+	  this,SLOT(selectionChangedData()));
+  connect(gen_calendar,SIGNAL(currentPageChanged(int,int)),
+	  this,SLOT(pageChangedData(int,int)));
 
   //
-  // Date Select Button
+  // Date count label and Clear button
   //
-  gen_select_button=new QPushButton(this);
-  gen_select_button->setFont(subButtonFont());
-  gen_select_button->setText(tr("Select"));
-  connect(gen_select_button,SIGNAL(clicked()),this,SLOT(selectDateData()));
+  gen_count_label=new QLabel(tr("0 dates selected"),this);
+  gen_count_label->setFont(labelFont());
+  gen_count_label->setAlignment(Qt::AlignLeft|Qt::AlignVCenter);
+
+  gen_clear_button=new QPushButton(this);
+  gen_clear_button->setFont(subButtonFont());
+  gen_clear_button->setText(tr("Clear Selection"));
+  connect(gen_clear_button,SIGNAL(clicked()),this,SLOT(clearMarkedData()));
 
   //
-  //  Create Log Button
+  // Replace Existing Checkbox
+  //
+  gen_replace_check=new QCheckBox(this);
+  gen_replace_check->setText(tr("Replace existing logs without prompting"));
+  gen_replace_check->setFont(labelFont());
+
+  //
+  // Auto Traffic Merge Checkbox
+  //
+  gen_merge_traffic_check=new QCheckBox(this);
+  gen_merge_traffic_check->setText(tr("Merge traffic if import file is available"));
+  gen_merge_traffic_check->setFont(labelFont());
+
+  //
+  //  Generate Log Button
   //
   gen_create_button=new QPushButton(this);
   gen_create_button->setFont(buttonFont());
-  gen_create_button->setText(tr("Create New Log"));
+  gen_create_button->setText(tr("Generate Log(s)"));
+  gen_create_button->setAutoDefault(false);
   connect(gen_create_button,SIGNAL(clicked()),this,SLOT(createData()));
 
   //
@@ -136,8 +265,6 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   //
   // Status Lights
   //
-  // Headers
-  //
   gen_import_label=new QLabel(tr("Import Data"),this);
   gen_import_label->setFont(labelFont());
   gen_import_label->setAlignment(Qt::AlignCenter);
@@ -150,9 +277,6 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   gen_merged_label->setFont(subLabelFont());
   gen_merged_label->setAlignment(Qt::AlignCenter);
 
-  //
-  // Music Indicators
-  //
   gen_mus_avail_label=new QLabel(this);
   gen_mus_avail_label->
     setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
@@ -165,9 +289,6 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   gen_mus_merged_label->setFont(subLabelFont());
   gen_mus_merged_label->setAlignment(Qt::AlignCenter);
 
-  //
-  // Traffic Indicators
-  //
   gen_tfc_avail_label=new QLabel(this);
   gen_tfc_avail_label->
     setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
@@ -179,7 +300,6 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
     setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
   gen_tfc_merged_label->setFont(subLabelFont());
   gen_tfc_merged_label->setAlignment(Qt::AlignCenter);
-
 
   //
   //  Close Button
@@ -198,17 +318,22 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
   QTimer *timer=new QTimer(this);
   connect(timer,SIGNAL(timeout()),this,SLOT(fileScanData()));
   timer->start(GENERATE_LOG_FILESCAN_INTERVAL);
- 
+
   if(cmdswitch==1 && cmdservicefit) {
     gen_service_box->setCurrentText(*cmdservice);
-    createData();
+    gen_calendar->setSelectedDate(*cmddate);
+    UpdateControls();
   }
   if(cmdswitch==2 && cmdservicefit) {
     gen_service_box->setCurrentText(*cmdservice);
+    gen_calendar->setSelectedDate(*cmddate);
+    UpdateControls();
     musicData();
   }
   if(cmdswitch==3 && cmdservicefit) {
     gen_service_box->setCurrentText(*cmdservice);
+    gen_calendar->setSelectedDate(*cmddate);
+    UpdateControls();
     trafficData();
   }
 }
@@ -216,8 +341,8 @@ GenerateLog::GenerateLog(QWidget *parent,int cmd_switch,QString *cmd_service,
 
 QSize GenerateLog::sizeHint() const
 {
-  return QSize(240,270);
-} 
+  return QSize(420,500);
+}
 
 
 QSizePolicy GenerateLog::sizePolicy() const
@@ -228,126 +353,202 @@ QSizePolicy GenerateLog::sizePolicy() const
 
 void GenerateLog::serviceActivatedData(int index)
 {
+  updateCalendarHighlights();
   UpdateControls();
+  gen_calendar->setFocus();
 }
 
 
-void GenerateLog::dateChangedData(const QDate &date)
+void GenerateLog::markedDatesChangedData(int count)
 {
-  UpdateControls();
-}
-
-
-void GenerateLog::selectDateData()
-{
-  QDate date=gen_date_edit->date();
-  QDate current_date=QDate::currentDate();
-
-  RDDateDialog *datedialog=
-    new RDDateDialog(current_date.year(),current_date.year()+1,this);
-  if(datedialog->exec(&date)<0) {
-    delete datedialog;
-    return;
+  if(count==1) {
+    gen_count_label->setText(tr("1 date selected"));
   }
-  gen_date_edit->setDate(date);
-  delete datedialog;
+  else {
+    gen_count_label->setText(QString::number(count)+" "+tr("dates selected"));
+  }
   UpdateControls();
+}
+
+
+void GenerateLog::clearMarkedData()
+{
+  gen_calendar->clearMarked();
+  gen_count_label->setText(tr("0 dates selected"));
+  UpdateControls();
+}
+
+
+void GenerateLog::selectionChangedData()
+{
+  UpdateControls();
+}
+
+
+void GenerateLog::pageChangedData(int year,int month)
+{
+  updateCalendarHighlights();
 }
 
 
 void GenerateLog::createData()
 {
-  QString report;
-  QString unused_report;
-  unsigned tracks=0;
-  QString err_msg;
+  if(gen_calendar->markedCount()==0)
+    return;
 
-  //
-  // Generate Log
-  //
-  RDSvc *svc=
-    new RDSvc(gen_service_box->currentText(),rda->station(),rda->config(),this);
-  QString logname=RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
-			       rda->station(),rda->config(),svc->name());
-  RDLog *log=new RDLog(logname);
-  if(log->exists()) {
-    if(QMessageBox::question(this,"RDLogManager - "+tr("Log Exists"),
-			     tr("The log for")+" "+
-			     rda->shortDateString(gen_date_edit->date())+" "+
-			     tr("already exists.  Recreating it")+"\n"+
-			     tr("will remove any merged Music or Traffic events.")+
-			     "\n\n"+tr("Recreate?"),
-			     QMessageBox::Yes,QMessageBox::No)!=
-       QMessageBox::Yes) {
-      delete log;
-      delete svc;
-      return;
-    }
-    if((tracks=log->completedTracks())>0) {
-      if(QMessageBox::warning(this,"RDLogManager - "+tr("Tracks Exist"),
-			      tr("This will also delete the")+
-			      QString::asprintf(" %u ",tracks)+
-			      tr("voice tracks associated with this log.")+
-			      "\n"+tr("Continue?"),
-			      QMessageBox::Yes,QMessageBox::No)!=
-	 QMessageBox::Yes) {
-	delete log;
-	delete svc;
-	return;
+  QList<QDate> dates;
+  foreach(const QDate &d,gen_calendar->markedDates()) {
+    dates.append(d);
+  }
+  std::sort(dates.begin(),dates.end());
+  int total=dates.size();
+
+  QString combined_report;
+  QString combined_unused;
+
+  gen_progress_dialog=new QProgressDialog(tr("Generating Log..."),
+                                           tr("Cancel"),0,24,this);
+  gen_progress_dialog->setWindowTitle("RDLogManager");
+  gen_progress_dialog->setAutoClose(false);
+  gen_progress_dialog->setAutoReset(false);
+  gen_progress_dialog->setMinimumDuration(0);
+  gen_progress_dialog->show();
+
+  for(int d=0;d<total;d++) {
+    QDate date=dates.at(d);
+
+    gen_progress_dialog->setLabelText(
+      tr("Generating log for")+" "+date.toString("ddd dd MMM yyyy")+
+      " ("+QString::number(d+1)+"/"+QString::number(total)+")");
+    gen_progress_dialog->setValue(0);
+    QCoreApplication::processEvents();
+
+    RDSvc *svc=
+      new RDSvc(gen_service_box->currentText(),rda->station(),rda->config(),this);
+    QString logname=RDDateDecode(svc->nameTemplate(),date,
+				  rda->station(),rda->config(),svc->name());
+    RDLog *log=new RDLog(logname);
+
+    if(log->exists()) {
+      if(!gen_replace_check->isChecked()) {
+	if(QMessageBox::question(this,"RDLogManager - "+tr("Log Exists"),
+				   tr("The log for")+" "+
+				   rda->shortDateString(date)+" "+
+				   tr("already exists.  Recreating it")+"\n"+
+				   tr("will remove any merged Music or Traffic events.")+
+				   "\n\n"+tr("Recreate?"),
+				   QMessageBox::Yes,QMessageBox::No)!=
+	   QMessageBox::Yes) {
+	  delete log;
+	  delete svc;
+	  continue;
+	}
+      }
+      unsigned tracks=0;
+      if((tracks=log->completedTracks())>0) {
+	if(QMessageBox::warning(this,"RDLogManager - "+tr("Tracks Exist"),
+				  tr("This will also delete the")+
+				  QString::asprintf(" %u ",tracks)+
+				  tr("voice tracks associated with this log.")+
+				  "\n"+tr("Continue?"),
+				  QMessageBox::Yes,QMessageBox::No)!=
+	   QMessageBox::Yes) {
+	  delete log;
+	  delete svc;
+	  continue;
+	}
       }
     }
-  }
-  SendNotification(RDNotification::DeleteAction,log->name());
-  log->removeTracks(rda->station(),rda->user(),rda->config());
 
-  //
-  // Scheduler
-  //
-  srand(QTime::currentTime().msec());
-  connect(svc,SIGNAL(generationProgress(int)),
-	  gen_progress_dialog,SLOT(setValue(int)));
-  if(!svc->generateLog(gen_date_edit->date(),
-		       RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
-				    rda->station(),rda->config(),svc->name()),
-		       RDDateDecode(svc->nameTemplate(),gen_date_edit->date().
-				    addDays(1),rda->station(),rda->config(),
-				    svc->name()),
-		       &unused_report,rda->user(),&err_msg)) {
-    QMessageBox::warning(this,"RDLogManager - "+tr("Error"),
-			 tr("Unable to generate log")+": "+err_msg);
-    gen_progress_dialog->setValue(gen_progress_dialog->maximum());
-    delete svc;
+    SendNotification(RDNotification::DeleteAction,log->name());
+    log->removeTracks(rda->station(),rda->user(),rda->config());
+
+    srand(QTime::currentTime().msec());
+    connect(svc,SIGNAL(generationProgress(int)),
+	    gen_progress_dialog,SLOT(setValue(int)));
+
+    QString err_msg;
+    QString unused_report;
+    if(!svc->generateLog(date,
+			  RDDateDecode(svc->nameTemplate(),date,
+				       rda->station(),rda->config(),svc->name()),
+			  RDDateDecode(svc->nameTemplate(),date.addDays(1),
+				       rda->station(),rda->config(),svc->name()),
+			  &unused_report,rda->user(),&err_msg)) {
+      QMessageBox::warning(this,"RDLogManager - "+tr("Error"),
+			    tr("Unable to generate log")+": "+err_msg);
+      delete log;
+      delete svc;
+      if(gen_progress_dialog->wasCanceled())
+	break;
+      continue;
+    }
+    log->updateTracks();
+    SendNotification(RDNotification::AddAction,log->name());
+
+    if(gen_merge_traffic_check->isChecked()) {
+      if(log->linkQuantity(RDLog::SourceTraffic)>0) {
+	QString tfc_file=svc->importFilename(RDSvc::Traffic,date);
+	if(QFile::exists(tfc_file)) {
+	  gen_progress_dialog->setLabelText(
+	    tr("Merging traffic for")+" "+date.toString("ddd dd MMM yyyy")+
+	    " ("+QString::number(d+1)+"/"+QString::number(total)+")");
+	  gen_progress_dialog->setValue(0);
+	  QString tfc_report;
+	  if(!svc->linkLog(RDSvc::Traffic,date,logname,&tfc_report,
+			    rda->user(),&err_msg)) {
+	    combined_report+=tr("Traffic merge failed for")+
+	      " "+date.toString("ddd dd MMM yyyy")+": "+err_msg+"\n";
+	  }
+	  else {
+	    SendNotification(RDNotification::ModifyAction,log->name());
+	  }
+	  if(!tfc_report.isEmpty()) {
+	    combined_report+=date.toString("ddd dd MMM yyyy")+":\n"+
+	      tfc_report+"\n";
+	  }
+	}
+      }
+    }
+
+    RDLogModel *model=new RDLogModel(logname,false,this);
+    model->load();
+    QString day_report;
+    int errs=model->validate(&day_report,date);
+    if(errs>0||!unused_report.isEmpty()) {
+      if(!day_report.isEmpty())
+	combined_report+=date.toString("ddd dd MMM yyyy")+":\n"+day_report+"\n";
+      if(!unused_report.isEmpty())
+	combined_unused+=date.toString("ddd dd MMM yyyy")+":\n"+unused_report+"\n";
+    }
+    delete model;
     delete log;
-    return;
-  }
-  log->updateTracks();
-  gen_progress_dialog->setValue(gen_progress_dialog->maximum());
-  SendNotification(RDNotification::AddAction,log->name());
-  delete log;
-  delete svc;
+    delete svc;
 
-  //
-  // Generate Exception Report
-  //
-  RDLogModel *model=new RDLogModel(logname,false,this);
-  model->load();
-  if((model->validate(&report,gen_date_edit->date())==0)&&
-     unused_report.isEmpty()) {
-    QMessageBox::information(this,tr("No Errors"),\
-      tr("No broken rules or validation exceptions found."));
+    if(gen_progress_dialog->wasCanceled())
+      break;
+  }
+
+  delete gen_progress_dialog;
+  gen_progress_dialog=nullptr;
+  updateCalendarHighlights();
+
+  if(combined_report.isEmpty()&&combined_unused.isEmpty()) {
+    QMessageBox::information(this,tr("No Errors"),
+			      tr("No broken rules or validation exceptions found."));
   }
   else {
-    int errs=unused_report.count("\n"); 
-    if(errs==1) {
-      unused_report+=QString::asprintf("\n%d broken rule.\n",errs);
+    QString full_report=combined_report;
+    if(!combined_unused.isEmpty()) {
+      int errs=combined_unused.count("\n");
+      full_report+=combined_unused;
+      if(errs==1)
+	full_report+=QString::asprintf("\n%d broken rule.\n",errs);
+      else
+	full_report+=QString::asprintf("\n%d broken rules.\n",errs);
     }
-    else {
-      unused_report+=QString::asprintf("\n%d broken rules.\n",errs);
-    }
-
-    RDTextFile(report+"\n"+unused_report);
+    RDTextFile(full_report);
   }
-  delete model;
 
   UpdateControls();
 }
@@ -355,12 +556,13 @@ void GenerateLog::createData()
 
 void GenerateLog::musicData()
 {
+  QDate date=gen_calendar->selectedDate();
   unsigned tracks=0;
   QString err_msg;
 
   RDSvc *svc=
     new RDSvc(gen_service_box->currentText(),rda->station(),rda->config(),this);
-  QString logname=RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
+  QString logname=RDDateDecode(svc->nameTemplate(),date,
 			       rda->station(),rda->config(),svc->name());
   RDLog *log=new RDLog(logname);
   if(((log->linkState(RDLog::SourceMusic)==RDLog::LinkDone)||
@@ -368,7 +570,7 @@ void GenerateLog::musicData()
     if(log->includeImportMarkers(RDLog::SourceMusic)) {
       if(QMessageBox::question(this,"RDLogManager - "+tr("Music Exists"),
 			       tr("The log for")+" "+
-			       rda->shortDateString(gen_date_edit->date())+" "+
+			       rda->shortDateString(date)+" "+
 			       tr("already contains merged music and/or traffic data.")+"\n"+
 			       tr("Remerging it will remove this data.  Remerge?"),
 			       QMessageBox::Yes,QMessageBox::No)!=
@@ -394,7 +596,7 @@ void GenerateLog::musicData()
     else {
       QMessageBox::warning(this,"RDLogManager - "+tr("Error"),
 			   tr("The log for")+" "+
-			   rda->shortDateString(gen_date_edit->date())+" "+
+			   rda->shortDateString(date)+" "+
 			   tr("cannot be relinked."));
       return;
     }
@@ -414,12 +616,20 @@ void GenerateLog::musicData()
       return;
     }
   }
+  gen_progress_dialog=new QProgressDialog(tr("Merging Music..."),
+                                           QString(),0,24,this);
+  gen_progress_dialog->setWindowTitle("RDLogManager");
+  gen_progress_dialog->setAutoClose(false);
+  gen_progress_dialog->setAutoReset(false);
+  gen_progress_dialog->setMinimumDuration(0);
+  gen_progress_dialog->show();
   connect(svc,SIGNAL(generationProgress(int)),
 	  gen_progress_dialog,SLOT(setValue(int)));
   QString report;
-  if(!svc->linkLog(RDSvc::Music,gen_date_edit->date(),logname,&report,
+  if(!svc->linkLog(RDSvc::Music,date,logname,&report,
 		   rda->user(),&err_msg)) {
-    gen_progress_dialog->setValue(gen_progress_dialog->maximum());
+    delete gen_progress_dialog;
+    gen_progress_dialog=nullptr;
     RDTextFile(tr("RDLogManager Error Report")+"\n\n"+
 	       tr("Music schedule import failed!")+"\n\n"+err_msg);
     delete log;
@@ -427,29 +637,34 @@ void GenerateLog::musicData()
     UpdateControls();
     return;
   }
+  delete gen_progress_dialog;
+  gen_progress_dialog=nullptr;
   SendNotification(RDNotification::ModifyAction,log->name());
   delete log;
   delete svc;
   if(!report.isEmpty()) {
     RDTextFile(report);
   }
+  updateCalendarHighlights();
   UpdateControls();
 }
 
 
 void GenerateLog::trafficData()
 {
+  QDate date=gen_calendar->selectedDate();
   QString err_msg;
+
   RDSvc *svc=
     new RDSvc(gen_service_box->currentText(),rda->station(),rda->config(),this);
-  QString logname=RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
+  QString logname=RDDateDecode(svc->nameTemplate(),date,
 			       rda->station(),rda->config(),svc->name());
   RDLog *log=new RDLog(logname);
   if((log->linkState(RDLog::SourceTraffic)==RDLog::LinkDone)) {
     if(log->includeImportMarkers(RDLog::SourceTraffic)) {
       if(QMessageBox::question(this,"RDLogManager - "+tr("Traffic Exists"),
 			       tr("The log for")+" "+
-			       rda->shortDateString(gen_date_edit->date())+" "+
+			       rda->shortDateString(date)+" "+
 			       tr("already contains merged traffic data.")+"\n"+
 			       tr("Remerging it will remove this data.  Remerge?"),
 			       QMessageBox::Yes,QMessageBox::No)!=
@@ -462,7 +677,7 @@ void GenerateLog::trafficData()
     else {
       QMessageBox::warning(this,"RDLogManager - "+tr("Error"),
 			   tr("The log for")+" "+
-			   rda->shortDateString(gen_date_edit->date())+" "+
+			   rda->shortDateString(date)+" "+
 			   tr("cannot be relinked."));
       return;
     }
@@ -474,13 +689,20 @@ void GenerateLog::trafficData()
       return;
     }
   }
+  gen_progress_dialog=new QProgressDialog(tr("Merging Traffic..."),
+                                           QString(),0,24,this);
+  gen_progress_dialog->setWindowTitle("RDLogManager");
+  gen_progress_dialog->setAutoClose(false);
+  gen_progress_dialog->setAutoReset(false);
+  gen_progress_dialog->setMinimumDuration(0);
+  gen_progress_dialog->show();
   connect(svc,SIGNAL(generationProgress(int)),
 	  gen_progress_dialog,SLOT(setValue(int)));
-
   QString report;
-  if(!svc->linkLog(RDSvc::Traffic,gen_date_edit->date(),logname,&report,rda->user(),
+  if(!svc->linkLog(RDSvc::Traffic,date,logname,&report,rda->user(),
 		   &err_msg)) {
-    gen_progress_dialog->setValue(gen_progress_dialog->maximum());
+    delete gen_progress_dialog;
+    gen_progress_dialog=nullptr;
     RDTextFile(tr("RDLogManager Error Report")+"\n\n"+
 	       tr("Traffic schedule import failed!")+"\n\n"+err_msg);
     delete log;
@@ -488,68 +710,71 @@ void GenerateLog::trafficData()
     UpdateControls();
     return;
   }
+  delete gen_progress_dialog;
+  gen_progress_dialog=nullptr;
   SendNotification(RDNotification::ModifyAction,log->name());
   delete log;
   delete svc;
   if(!report.isEmpty()) {
     RDTextFile(report);
   }
+  updateCalendarHighlights();
   UpdateControls();
 }
 
 
 void GenerateLog::fileScanData()
 {
-  if(gen_service_box->currentIndex()>0) {
-    RDSvc *svc=new RDSvc(gen_service_box->currentText(),rda->station(),
-			 rda->config(),this);
-    QString logname=RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
-				 rda->station(),rda->config(),svc->name());
-    RDLog *log=new RDLog(logname);
-    if(gen_music_enabled) {
-      if(QFile::exists(svc->
-		       importFilename(RDSvc::Music,gen_date_edit->date()))) {
-	gen_music_button->
-	  setEnabled(log->includeImportMarkers(RDLog::SourceMusic)||
-		     (log->linkState(RDLog::SourceMusic)==RDLog::LinkMissing));
-	gen_mus_avail_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
-      }
-      else {
-	gen_music_button->setDisabled(true);
-	gen_mus_avail_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
-      }
-    }
-    else {
+  if(gen_service_box->currentIndex()==0)
+    return;
+
+  QDate date=gen_calendar->selectedDate();
+  RDSvc *svc=new RDSvc(gen_service_box->currentText(),rda->station(),
+			rda->config(),this);
+  QString logname=RDDateDecode(svc->nameTemplate(),date,
+			       rda->station(),rda->config(),svc->name());
+  RDLog *log=new RDLog(logname);
+  if(gen_music_enabled) {
+    if(QFile::exists(svc->importFilename(RDSvc::Music,date))) {
+      gen_music_button->
+	setEnabled(log->includeImportMarkers(RDLog::SourceMusic)||
+		   (log->linkState(RDLog::SourceMusic)==RDLog::LinkMissing));
       gen_mus_avail_label->
-	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
-    }
-    if(gen_traffic_enabled) {
-      if(QFile::exists(svc->
-		       importFilename(RDSvc::Traffic,gen_date_edit->date()))) {
-	gen_traffic_button->
-	  setEnabled(((!gen_music_enabled)||
-		      (log->linkState(RDLog::SourceMusic)==RDLog::LinkDone))&&
-		     (log->includeImportMarkers(RDLog::SourceTraffic)||
-		      (log->linkState(RDLog::SourceTraffic)==
-		       RDLog::LinkMissing)));
-	gen_tfc_avail_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
-      }
-      else {
-	gen_traffic_button->setDisabled(true);
-	gen_tfc_avail_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
-      }
+	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
     }
     else {
-      gen_tfc_avail_label->
-	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+      gen_music_button->setDisabled(true);
+      gen_mus_avail_label->
+	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
     }
-    delete log;
-    delete svc;
   }
+  else {
+    gen_mus_avail_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+  }
+  if(gen_traffic_enabled) {
+    if(QFile::exists(svc->importFilename(RDSvc::Traffic,date))) {
+      gen_traffic_button->
+	setEnabled(((!gen_music_enabled)||
+		    (log->linkState(RDLog::SourceMusic)==RDLog::LinkDone))&&
+		   (log->includeImportMarkers(RDLog::SourceTraffic)||
+		    (log->linkState(RDLog::SourceTraffic)==
+		     RDLog::LinkMissing)));
+      gen_tfc_avail_label->
+	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
+    }
+    else {
+      gen_traffic_button->setDisabled(true);
+      gen_tfc_avail_label->
+	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
+    }
+  }
+  else {
+    gen_tfc_avail_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+  }
+  delete log;
+  delete svc;
 }
 
 
@@ -561,99 +786,169 @@ void GenerateLog::closeData()
 
 void GenerateLog::resizeEvent(QResizeEvent *e)
 {
-  gen_service_box->setGeometry(70,10,sizeHint().width()-80,20);
+  int w=sizeHint().width();
+  int h=sizeHint().height();
+
   gen_service_label->setGeometry(10,10,55,20);
-  gen_date_edit->setGeometry(70,38,100,20);
-  gen_date_label->setGeometry(10,38,55,20);
-  gen_select_button->setGeometry(180,33,50,30);
-  gen_create_button->setGeometry(10,70,sizeHint().width()-20,30);
-  gen_music_button->setGeometry(10,130,100,30);
-  gen_traffic_button->setGeometry(10,170,100,30);
-  gen_import_label->setGeometry(120,105,120,14);
-  gen_available_label->setGeometry(120,119,60,14);
-  gen_merged_label->setGeometry(180,119,60,14);
-  gen_mus_avail_label->setGeometry(120,139,60,14);
-  gen_mus_merged_label->setGeometry(180,139,60,14);
-  gen_tfc_avail_label->setGeometry(120,179,60,14);
-  gen_tfc_merged_label->setGeometry(180,179,60,14);
-  gen_close_button->
-    setGeometry(10,sizeHint().height()-60,sizeHint().width()-20,50);
+  gen_service_box->setGeometry(70,10,w-80,20);
+
+  gen_calendar->setGeometry(10,38,w-20,185);
+
+  gen_count_label->setGeometry(10,233,220,20);
+  gen_clear_button->setGeometry(238,229,w-248,28);
+
+  gen_replace_check->setGeometry(10,265,w-20,20);
+  gen_merge_traffic_check->setGeometry(10,290,w-20,20);
+
+  gen_create_button->setGeometry(10,318,w-20,30);
+
+  gen_import_label->setGeometry(130,360,210,14);
+  gen_available_label->setGeometry(200,374,60,14);
+  gen_merged_label->setGeometry(268,374,60,14);
+
+  gen_music_button->setGeometry(10,358,110,30);
+  gen_mus_avail_label->setGeometry(200,388,60,14);
+  gen_mus_merged_label->setGeometry(268,388,60,14);
+
+  gen_traffic_button->setGeometry(10,398,110,30);
+  gen_tfc_avail_label->setGeometry(200,412,60,14);
+  gen_tfc_merged_label->setGeometry(268,412,60,14);
+
+  gen_close_button->setGeometry(10,h-60,w-20,50);
 }
 
 
 void GenerateLog::UpdateControls()
 {
-  gen_date_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_date_edit->setDisabled(gen_service_box->currentIndex()==0);
-  gen_select_button->setDisabled(gen_service_box->currentIndex()==0);
-  gen_create_button->setDisabled(gen_service_box->currentIndex()==0);
-  gen_import_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_available_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_merged_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_mus_avail_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_mus_merged_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_tfc_avail_label->setDisabled(gen_service_box->currentIndex()==0);
-  gen_tfc_merged_label->setDisabled(gen_service_box->currentIndex()==0);
-  if(gen_service_box->currentIndex()==0) {
+  bool svc_ok=gen_service_box->currentIndex()>0;
+  bool has_marked=gen_calendar->markedCount()>0;
+
+  gen_calendar->setEnabled(svc_ok);
+  gen_count_label->setEnabled(svc_ok);
+  gen_clear_button->setEnabled(svc_ok&&has_marked);
+  gen_replace_check->setEnabled(svc_ok);
+  gen_merge_traffic_check->setEnabled(svc_ok);
+  gen_create_button->setEnabled(svc_ok&&has_marked);
+  gen_import_label->setEnabled(svc_ok);
+  gen_available_label->setEnabled(svc_ok);
+  gen_merged_label->setEnabled(svc_ok);
+  gen_mus_avail_label->setEnabled(svc_ok);
+  gen_mus_merged_label->setEnabled(svc_ok);
+  gen_tfc_avail_label->setEnabled(svc_ok);
+  gen_tfc_merged_label->setEnabled(svc_ok);
+
+  if(!svc_ok) {
     gen_music_button->setDisabled(true);
     gen_traffic_button->setDisabled(true);
+    gen_mus_merged_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_tfc_merged_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_mus_avail_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_tfc_avail_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_music_enabled=false;
+    gen_traffic_enabled=false;
+    return;
   }
-  else {
-    RDSvc *svc=new RDSvc(gen_service_box->currentText(),rda->station(),
-			 rda->config(),this);
-    QString logname=RDDateDecode(svc->nameTemplate(),gen_date_edit->date(),
-				 rda->station(),rda->config(),svc->name());
-    RDLog *log=new RDLog(logname);
-    if(log->exists()) {
-      if(log->linkQuantity(RDLog::SourceMusic)>0) {
-	gen_music_enabled=true;
-	if(log->linkState(RDLog::SourceMusic)==RDLog::LinkDone) {
-	  gen_mus_merged_label->
-	    setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
-	}
-	else {
-	  gen_mus_merged_label->
-	    setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
-	}
-      }
-      else {
-	gen_music_enabled=false;
-	gen_music_button->setDisabled(true);
+
+  QDate date=gen_calendar->selectedDate();
+  RDSvc *svc=new RDSvc(gen_service_box->currentText(),rda->station(),
+			rda->config(),this);
+  QString logname=RDDateDecode(svc->nameTemplate(),date,
+			       rda->station(),rda->config(),svc->name());
+  RDLog *log=new RDLog(logname);
+  if(log->exists()) {
+    if(log->linkQuantity(RDLog::SourceMusic)>0) {
+      gen_music_enabled=true;
+      if(log->linkState(RDLog::SourceMusic)==RDLog::LinkDone) {
 	gen_mus_merged_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
-      }
-      if(log->linkQuantity(RDLog::SourceTraffic)>0) {
-	gen_traffic_enabled=true;
-	if(log->linkState(RDLog::SourceTraffic)==RDLog::LinkDone) {
-	  gen_tfc_merged_label->
-	    setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
-	}
-	else {
-	  gen_tfc_merged_label->
-	    setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
-	}
+	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
       }
       else {
-	gen_traffic_enabled=false;
-	gen_traffic_button->setDisabled(true);
-	gen_tfc_merged_label->
-	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+	gen_mus_merged_label->
+	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
       }
     }
     else {
+      gen_music_enabled=false;
       gen_music_button->setDisabled(true);
       gen_mus_merged_label->
 	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    }
+    if(log->linkQuantity(RDLog::SourceTraffic)>0) {
+      gen_traffic_enabled=true;
+      if(log->linkState(RDLog::SourceTraffic)==RDLog::LinkDone) {
+	gen_tfc_merged_label->
+	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::GreenBall));
+      }
+      else {
+	gen_tfc_merged_label->
+	  setPixmap(rda->iconEngine()->listIcon(RDIconEngine::RedBall));
+      }
+    }
+    else {
+      gen_traffic_enabled=false;
       gen_traffic_button->setDisabled(true);
       gen_tfc_merged_label->
 	setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
-      gen_music_enabled=false;
-      gen_traffic_enabled=false;
     }
-    delete log;
-    delete svc;
-    fileScanData();
   }
+  else {
+    gen_music_button->setDisabled(true);
+    gen_mus_merged_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_traffic_button->setDisabled(true);
+    gen_tfc_merged_label->
+      setPixmap(rda->iconEngine()->listIcon(RDIconEngine::WhiteBall));
+    gen_music_enabled=false;
+    gen_traffic_enabled=false;
+  }
+  delete log;
+  delete svc;
+  fileScanData();
+}
+
+
+void GenerateLog::updateCalendarHighlights()
+{
+  if(gen_service_box->currentIndex()==0) {
+    gen_calendar->setLogStatuses(QMap<QDate,int>());
+    return;
+  }
+
+  RDSvc *svc=new RDSvc(gen_service_box->currentText(),rda->station(),
+			rda->config(),this);
+
+  // One query for all logs belonging to this service
+  QString sql=QString("select `NAME`,`TRAFFIC_LINKED` from `LOGS` where ")+
+    "`SERVICE`='"+RDEscapeString(svc->name())+"'";
+  RDSqlQuery *q=new RDSqlQuery(sql);
+  QMap<QString,int> byName;  // logname -> 1=generated, 2=traffic merged
+  while(q->next()) {
+    int status=(q->value(1).toString()=="Y") ? 2 : 1;
+    byName[q->value(0).toString()]=status;
+  }
+  delete q;
+
+  // Map log names back to dates for the visible month range
+  // Go back 6 days to cover any first-day-of-week and forward 42 days
+  QDate first(gen_calendar->yearShown(),gen_calendar->monthShown(),1);
+  QDate rangeStart=first.addDays(-6);
+  QDate rangeEnd=first.addDays(41);
+
+  QMap<QDate,int> statusMap;
+  for(QDate d=rangeStart;d<=rangeEnd;d=d.addDays(1)) {
+    QString logname=RDDateDecode(svc->nameTemplate(),d,
+				  rda->station(),rda->config(),svc->name());
+    if(byName.contains(logname)) {
+      statusMap[d]=byName[logname];
+    }
+  }
+
+  gen_calendar->setLogStatuses(statusMap);
+  delete svc;
 }
 
 

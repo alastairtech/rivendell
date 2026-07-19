@@ -21,27 +21,61 @@
 #ifndef GENERATE_LOG_H
 #define GENERATE_LOG_H
 
+#include <QCalendarWidget>
+#include <QCheckBox>
+#include <QMap>
 #include <QProgressDialog>
+#include <QSet>
+#include <QTextCharFormat>
 
 #include <rdcombobox.h>
-#include <rddateedit.h>
 #include <rddialog.h>
 #include <rdnotification.h>
 
 #define GENERATE_LOG_FILESCAN_INTERVAL 5000
 
+
+class MultiDateCalendar : public QCalendarWidget
+{
+ Q_OBJECT
+ public:
+  MultiDateCalendar(QWidget *parent=0);
+  QSet<QDate> markedDates() const;
+  int markedCount() const;
+  void clearMarked();
+  void setLogStatuses(const QMap<QDate,int> &statuses);
+
+ signals:
+  void markedDatesChanged(int count);
+
+ protected:
+  void paintCell(QPainter *painter,const QRect &rect,const QDate &date) const;
+
+ private slots:
+  void dateClickedSlot(const QDate &date);
+
+ private:
+  void refreshFormats();
+  QSet<QDate> cal_dates;          // dates marked for generation (shown blue)
+  QMap<QDate,int> cal_log_status; // 1=generated (yellow), 2=traffic merged (green)
+  QSet<QDate> cal_formatted;      // every date we have called setDateTextFormat on
+};
+
+
 class GenerateLog : public RDDialog
 {
  Q_OBJECT
  public:
-  GenerateLog(QWidget *parent=0,int cmd_schwitch=0,QString *cmd_service=NULL,QDate *cmd_date=NULL);
+  GenerateLog(QWidget *parent=0,int cmd_switch=0,QString *cmd_service=NULL,QDate *cmd_date=NULL);
   QSize sizeHint() const;
   QSizePolicy sizePolicy() const;
 
  private slots:
   void serviceActivatedData(int index);
-  void dateChangedData(const QDate &date);
-  void selectDateData();
+  void markedDatesChangedData(int count);
+  void clearMarkedData();
+  void selectionChangedData();
+  void pageChangedData(int year,int month);
   void createData();
   void musicData();
   void trafficData();
@@ -53,12 +87,15 @@ class GenerateLog : public RDDialog
 
  private:
   void UpdateControls();
+  void updateCalendarHighlights();
   void SendNotification(RDNotification::Action action,const QString &logname);
   QLabel *gen_service_label;
   QComboBox *gen_service_box;
-  QLabel *gen_date_label;
-  RDDateEdit *gen_date_edit;
-  QPushButton *gen_select_button;
+  MultiDateCalendar *gen_calendar;
+  QLabel *gen_count_label;
+  QPushButton *gen_clear_button;
+  QCheckBox *gen_replace_check;
+  QCheckBox *gen_merge_traffic_check;
   QLabel *gen_import_label;
   QLabel *gen_available_label;
   QLabel *gen_merged_label;

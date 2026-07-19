@@ -19,6 +19,7 @@
 //
 
 #include <QObject>
+#include <QSet>
 
 #include "rdapplication.h"
 #include "rdconf.h"
@@ -36,6 +37,14 @@ RDEventLine::RDEventLine(RDStation *station)
   event_preimport_list=new RDEventImportList();
   event_postimport_list=new RDEventImportList();
   clear();
+}
+
+
+RDEventLine::~RDEventLine()
+{
+  delete event_preimport_list;
+  delete event_postimport_list;
+  qDeleteAll(event_cart_cache);
 }
 
 
@@ -480,7 +489,7 @@ bool RDEventLine::generateLog(const QString &logname,const QString &svcname,
   //
   sql=QString("select `COUNT` from `LOG_LINES` where ")+
     "`LOG_NAME`='"+RDEscapeString(logname)+"' "+
-    "order by `COUNT` desc";
+    "order by `COUNT` desc limit 1";
   q=new RDSqlQuery(sql);
   if(q->first()) {
     state->count=q->value(0).toInt()+1;
@@ -490,7 +499,7 @@ bool RDEventLine::generateLog(const QString &logname,const QString &svcname,
   sql=QString("select `LINK_ID` from `LOG_LINES` where ")+
     "`LOG_NAME`='"+RDEscapeString(logname)+"' && "+
     "`LINK_ID`>=0 "+
-    "order by `LINK_ID` desc";
+    "order by `LINK_ID` desc limit 1";
   q=new RDSqlQuery(sql);
   if(q->first()) {
     state->link_id=q->value(0).toInt()+1;
@@ -1106,24 +1115,38 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
   delete q;
       
   //
-  // Load all carts in requested group into schedCL
+  // Load all carts in requested group into schedCL, using cache to avoid
+  // repeated DB queries for the same group within a single generation run.
   //
-  sql=QString("select `NUMBER`,`ARTIST`,`TITLE`,")+
-    "CONCAT(GROUP_CONCAT(RPAD(`SC`.`SCHED_CODE`,11,'|') separator ''),'.') as `SCHED_CODES`"+
-    " from `CART` LEFT JOIN `CART_SCHED_CODES` AS `SC` on (`NUMBER`=`SC`.`CART_NUMBER`)"+
-    " where `GROUP_NAME`='"+RDEscapeString(schedGroup())+"'"+
-    " group by `NUMBER`";
   RDSchedCartList *schedCL=new RDSchedCartList();
-  q=new RDSqlQuery(sql);
-  while(q->next()) {
-    QStringList codes=q->value(3).toString().split("|",QString::SkipEmptyParts);
-    if((codes.size()>0)&&(codes.last()==".")) {
-      codes.removeLast();
+  __RDEventLine_CartCacheEntry *cacheEntry=event_cart_cache.value(schedGroup(),NULL);
+  if(cacheEntry==NULL) {
+    cacheEntry=new __RDEventLine_CartCacheEntry();
+    sql=QString("select `NUMBER`,`ARTIST`,`TITLE`,")+
+      "CONCAT(GROUP_CONCAT(RPAD(`SC`.`SCHED_CODE`,11,'|') separator ''),'.') as `SCHED_CODES`"+
+      " from `CART` LEFT JOIN `CART_SCHED_CODES` AS `SC` on (`NUMBER`=`SC`.`CART_NUMBER`)"+
+      " where `GROUP_NAME`='"+RDEscapeString(schedGroup())+"'"+
+      " group by `NUMBER`";
+    q=new RDSqlQuery(sql);
+    while(q->next()) {
+      QStringList codes=q->value(3).toString().split("|",QString::SkipEmptyParts);
+      if((codes.size()>0)&&(codes.last()==".")) {
+        codes.removeLast();
+      }
+      cacheEntry->cartnums.append(q->value(0).toUInt());
+      cacheEntry->artists.append(q->value(1).toString());
+      cacheEntry->titles.append(q->value(2).toString());
+      cacheEntry->schedcodes.append(codes);
     }
-    schedCL->
-      insertItem(q->value(0).toUInt(),0,0,q->value(1).toString(),q->value(2).toString(),codes);
+    delete q;
+    event_cart_cache[schedGroup()]=cacheEntry;
   }
-  delete q;
+  for(int i=0;i<cacheEntry->cartnums.size();i++) {
+    schedCL->insertItem(cacheEntry->cartnums.at(i),0,0,
+                        cacheEntry->artists.at(i),
+                        cacheEntry->titles.at(i),
+                        cacheEntry->schedcodes.at(i));
+  }
 
   //////////////////////////////////
   //                              //
@@ -1156,20 +1179,21 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
     // match title on the stack.
     //
     if(titlesep>=0) {
-      schedCL->save();		  
+      schedCL->save();
       sql=QString("select `TITLE` from `STACK_LINES` where ")+
 	"`SERVICE_NAME`='"+RDEscapeString(svcname)+"' && "+
 	QString::asprintf("`SCHED_STACK_ID` >= %d",stackid-titlesep);
       q=new RDSqlQuery(sql);
-      while (q->next()) {
-	for(counter=0;counter<schedCL->getNumberOfItems();counter++) { 
-	  if(q->value(0).toString()==schedCL->getItemTitle(counter)) {
-	    schedCL->removeItem(counter);
-	    counter--;
-	  }
-	}
+      QSet<QString> recentTitles;
+      while(q->next()) {
+	recentTitles.insert(q->value(0).toString());
       }
       delete q;
+      for(counter=schedCL->getNumberOfItems()-1;counter>=0;counter--) {
+	if(recentTitles.contains(schedCL->getItemTitle(counter))) {
+	  schedCL->removeItem(counter);
+	}
+      }
       if(schedCL->getNumberOfItems()==0) {
 	*report+=rda->timeString(state->start_time)+" "+
 	  QObject::tr("Rule broken: Title separation");
@@ -1188,20 +1212,21 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
     // match artist on the stack.
     //
     if(artistsep>=0) {
-      schedCL->save();		  
+      schedCL->save();
       sql=QString("select `ARTIST` from `STACK_LINES` where ")+
 	"`SERVICE_NAME`='"+RDEscapeString(svcname)+"' && "+
 	QString::asprintf("`SCHED_STACK_ID` >= %d",stackid-artistsep);
       q=new RDSqlQuery(sql);
-      while (q->next()) {
-	for(counter=0;counter<schedCL->getNumberOfItems();counter++) { 
-	  if(q->value(0).toString()==schedCL->getItemArtist(counter)) {
-	    schedCL->removeItem(counter);
-	    counter--;
-	  }
-	}
-      }          
+      QSet<QString> recentArtists;
+      while(q->next()) {
+	recentArtists.insert(q->value(0).toString());
+      }
       delete q;
+      for(counter=schedCL->getNumberOfItems()-1;counter>=0;counter--) {
+	if(recentArtists.contains(schedCL->getItemArtist(counter))) {
+	  schedCL->removeItem(counter);
+	}
+      }
       if(schedCL->getNumberOfItems()==0) {
 	*report+=rda->timeString(state->start_time)+" "+
 	  QObject::tr("Rule broken: Artist separation");
@@ -1241,11 +1266,7 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
 	"`STACK_SCHED_CODES`.`SCHED_CODE`='"+RDEscapeString(wstr)+"'";
       q1=new RDSqlQuery(sql);
       if(q1->size()>=allowed || allowed==0) {
-	for(counter=0;counter<schedCL->getNumberOfItems();counter++) {
-	  if(schedCL->removeIfCode(counter,q->value(0).toString())) {
-	    counter--;
-	  }
-	}
+	schedCL->removeIfCode(0,q->value(0).toString());
       }
       delete q1;
       if(schedCL->getNumberOfItems()==0) {
@@ -1269,11 +1290,7 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
 	  "`STACK_SCHED_CODES`.`SCHED_CODE`='"+RDEscapeString(wstr)+"'";
 	q1=new RDSqlQuery(sql);
 	if(q1->size()>0) {
-	  for(counter=0;counter<schedCL->getNumberOfItems();counter++) {
-	    if(schedCL->removeIfCode(counter,q->value(0).toString())) {
-	      counter--;
-	    }
-	  }
+	  schedCL->removeIfCode(0,q->value(0).toString());
 	}
 	delete q1;
 	if(schedCL->getNumberOfItems()==0) {
@@ -1296,12 +1313,8 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
 	  QString::asprintf("`STACK_LINES`.`SCHED_STACK_ID`=%d && ",stackid-1)+
 	  "`STACK_SCHED_CODES`.`SCHED_CODE`='"+RDEscapeString(wstr)+"'";
 	q1=new RDSqlQuery(sql);
-	if(q1->size()>0) {	
-	  for(counter=0;counter<schedCL->getNumberOfItems();counter++) {
-	    if(schedCL->removeIfCode(counter,q->value(0).toString())) {
-	      counter--;
-	    }
-	  }
+	if(q1->size()>0) {
+	  schedCL->removeIfCode(0,q->value(0).toString());
 	}
 	delete q1;
 	if(schedCL->getNumberOfItems()==0) {
@@ -1325,11 +1338,7 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
 	  "`STACK_SCHED_CODES`.`SCHED_CODE`='"+RDEscapeString(wstr)+"'";
 	q1=new RDSqlQuery(sql);
 	if(q1->size()>0) {
-	  for(counter=0;counter<schedCL->getNumberOfItems();counter++) {
-	    if(schedCL->removeIfCode(counter,q->value(0).toString())) {
-	      counter--;
-	    }
-	  }
+	  schedCL->removeIfCode(0,q->value(0).toString());
 	}
 	delete q1;
 	if(schedCL->getNumberOfItems()==0) {
