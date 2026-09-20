@@ -2,7 +2,7 @@
 //
 // Rivendell Log Playout Machine
 //
-//   (C) Copyright 2002-2024 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2026 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -162,10 +162,12 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
   // Transition Timers
   //
   play_trans_timer=new QTimer(this);
+  play_trans_timer->setTimerType(Qt::PreciseTimer);
   play_trans_timer->setSingleShot(true);
   connect(play_trans_timer,SIGNAL(timeout()),
 	  this,SLOT(transTimerData()));
   play_grace_timer=new QTimer(this);
+  play_grace_timer->setTimerType(Qt::PreciseTimer);
   play_grace_timer->setSingleShot(true);
   connect(play_grace_timer,SIGNAL(timeout()),
 	  this,SLOT(graceTimerData()));
@@ -1427,6 +1429,17 @@ void RDLogPlay::setSlotQuantity(int slot_quan)
     roles.push_back(Qt::BackgroundRole);
     emit dataChanged(createIndex(play_next_line,0),
 		     createIndex(play_next_line+play_slot_quantity-1,columnCount()),roles);
+  }
+}
+
+
+void RDLogPlay::changeCurrentDate(const QDate &date)
+{
+  rda->syslog(LOG_DEBUG,"changing current date to %s on log machine %d",
+	      date.toString("yyyy-dd-MM").toUtf8().constData(),play_id);
+  if(date!=play_current_date) {
+    RefreshEvents(0,lineCount());
+    play_current_date=date;
   }
 }
 

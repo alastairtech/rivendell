@@ -33,6 +33,7 @@
 #include <alsa/asoundlib.h>
 struct alsa_format {
   int card;
+  RDAlsaCard *alsacard;
   pthread_t thread;
   snd_pcm_t *pcm;
   unsigned channels;
@@ -99,10 +100,8 @@ class DriverAlsa : public Driver
 
  private:
 #ifdef ALSA
-  bool AlsaStartCaptureDevice(QString &dev,int card,snd_pcm_t *pcm,
-			      RDAlsaCard *alsacard);
-  bool AlsaStartPlayDevice(QString &dev,int card,snd_pcm_t *pcm,
-			   RDAlsaCard *alsacard);
+  bool AlsaStartCaptureDevice(RDAlsaCard *alsacard,int card,snd_pcm_t *pcm);
+  bool AlsaStartPlayDevice(RDAlsaCard *alsacard,int cardnum,snd_pcm_t *pcm);
   void AlsaInitCallback();
   int GetAlsaOutputStream(int card);
   void FreeAlsaOutputStream(int card,int stream);
@@ -110,6 +109,9 @@ class DriverAlsa : public Driver
   void WriteAlsaBuffer(int card,int stream,short *buffer,unsigned len);
   void FillAlsaOutputStream(int card,int stream);
   void AlsaClock();
+  void DumpHardwareParams(snd_pcm_hw_params_t *hwparams) const;
+  void DumpSoftwareParams(snd_pcm_sw_params_t *swparams) const;
+  QString SampleFormatName(snd_pcm_format_t format) const;
   QMap<int,int> alsa_input_port_quantities;
   QMap<int,int> alsa_output_port_quantities;
   struct alsa_format alsa_play_format[RD_MAX_CARDS];

@@ -40,13 +40,20 @@ class RDAlsaCard
   QString longName() const;
   QString prettyLongName() const;
   QString mixerName() const;
+  int pcmQuantity() const;
+  QString pcmName(int pcm_num) const;
   QString prettyMixerName() const;
-  bool isEnabled() const;
-  void setEnabled(bool state);
+  bool isEnabled(int pcm_num) const;
+  void setEnabled(int pcm_num,bool state);
   int maxChannelsPerPcm() const;
+  int periodFrames() const;
+  void setPeriodFrames(int frames);
+  int periodQuantity() const;
+  void setPeriodQuantity(int n);
   QString dump() const;
 
  private:
+  int AxiaSlotQuantity() const;
   int card_index;
   QString card_id;
   QString card_driver;
@@ -57,7 +64,10 @@ class RDAlsaCard
   QString card_mixer_name;
   QString card_pretty_mixer_name;
   int card_max_channels_per_pcm;
-  bool card_enabled;
+  int card_period_frames;
+  int card_period_quantity;
+  QStringList card_pcm_names;
+  QList<bool> card_enableds;
 };
 #endif  // ALSA
 

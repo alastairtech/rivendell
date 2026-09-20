@@ -25136,3 +25136,74 @@
 	cleaning up the mountpoint on CentOS 7.
 2026-06-15 Fred Gleason <fredg@paravelsystems.com>
 	* Fixed a dependency error in the 'rivendell-dev' DEB package.
+2026-07-24 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in caed(8) that could cause distorted audio when
+	capturing from AoIP streams via ALSA.
+	* Refactored the ALSA driver in caed(8) to log software parameters
+	upon startup.
+2026-07-30 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression that could caused truncation of audio play-out
+	from logs in rdairplay(1).
+2026-07-30 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.4.1int4.
+2026-07-31 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in rdlibrary(1) that caused a segfault if started
+	with the 'rivendell' service inactive.
+2026-07-31 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in the ALSA driver that could cause play-out to
+	ignore Stop markers in the 'Edit Audio' dialog.
+	* Modified caed(8) to improve timer precision for audio transitions.
+2026-07-31 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.4.1int5.
+2026-08-02 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in rdairplay(1) that could cause log event dayparting
+	status to fail to be updated correctly when transitioning into a new
+	day.
+2026-08-02 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in rdvairplayd(8) that could cause log event dayparting
+	status to fail to be updated correctly when transitioning into a new
+	day.
+2026-08-02 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression in rdadmin(1) that could cause spurious values
+	to appear in the 'Port' field on RDCardSelector widgets.
+2026-08-03 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.4.1int6.
+2026-08-03 Fred Gleason <fredg@paravelsystems.com>
+	* Optimized database lookups when starting Sound Panel instances
+	in rdpanel(1) and rdairplay(1).
+2026-08-03 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.4.1int7.
+2026-08-07 Fred Gleason <fredg@paravelsystems.com>
+	* Added 'pulseaudio' to the 'Conflicts:' field for the 'rivendell'
+	DEB package.
+2026-08-07 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression in rdalsaconfig(8) that caused extra linefeeds
+	to be inserted into existing entries in asound.conf(5).
+2026-08-07 Fred Gleason <fredg@paravelsystems.com>
+	* Added troubleshooting log statements to the ALSA driver in caed(8).
+2026-08-10 Fred Gleason <fredg@paravelsystems.com>
+	* Refactored caed(8) to avoid the use of 'rd<n>'-style indirect
+	devices.
+	* Added a device quirk for the LWSound driver.
+	* Refactored rdalsaconfig(8) to include the ALSA device ID for
+	each detected sound card.
+2026-08-10 Fred Gleason <fredg@paravelsystems.com>
+	* Modified the ALSA driver in caed(8) to use period timing hints
+	from RDAlsaCard.
+2026-08-12 Fred Gleason <fredg@paravelsystems.com>
+	* Modified rdalsaconfig(8) to correctly handle management of
+	the Axia Livewire driver.
+2026-08-12 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed regressions in rdalsaconfig(8) that broke support for
+	management of the LWSound AoIP driver.
+2026-08-12 Fred Gleason <fredg@paravelsystems.com>
+	* Removed debugging statements from 'rdalsa/rdalsacard.cpp'.
+	* Removed debugging statements from 'rdalsa/rdalsamodel.cpp'.
+2026-08-25 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a bug in the 'RDCart::updateLength()' method that failed to
+	update the 'CART.FORCED_LENGTH' field when calculating a new overall
+	length.
+2026-08-25 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.4.1int8.
+2026-08-26 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to v4.5.0.
